@@ -22,6 +22,7 @@ Space	EQU	20h
 ; Передана строчная латинская буква в нижнем регистре? 0 : 1
 ;
 isLetterLC macro letter	
+	local notLetter
 	pushf
 	mov al, letter					
 	cmp al, 61h
@@ -39,6 +40,7 @@ exitIsLetterLC:
 ; Передана строчная латинская буква в верхнем регистре? 0 : 1
 ;
 isLetterUC macro letter	
+	local notLetter
 	pushf
 	mov al, letter					
 	cmp al, 41h
@@ -138,6 +140,7 @@ emptyBuffer PROC near
 	pop cx
 @@exit:	
 	popf
+	dec BufferIndex
 	ret
 emptyBuffer endp
 ;
@@ -149,13 +152,19 @@ checkBuffer PROC near
 	push di
 	mov ah, 1
 	cmp BufferIndex, 0
-	je @@exit
+	jne @@cont_cb1
+	jmp @@exit
+@@cont_cb1:
 	mov di, BufferIndex
 	cmp Buffer[di], dot
-	je @@exit
+	jne @@cont_cb2
+	jmp @@exit
+@@cont_cb2:
 	mov di, 0
 	cmp Buffer[di], dot
-	je @@exit
+	jne @@cont_cb3
+	jmp @@exit
+@@cont_cb3:
 	push cx
 	mov cx, BufferIndex
 @@cycle:
@@ -178,53 +187,77 @@ checkBuffer PROC near
 	pop cx
 	mov ah, 1
 	jmp @@exit
-@@cont_cycle	
+@@cont_cycle:	
 	inc di
 	loop @@cycle
 	
 	; в этом месте реализовать процедуру нескольких точек
 	mov ah, 0
 	pop cx
-	jmp exit
 @@exit:
 	pop di
 	popf
 	ret
-emptyBuffer endp
+checkBuffer endp
 
 terminator proc	near
-LOCALS @@
-	cmp Buffer[di],dog
+	LOCALS @@
+	push di
+	mov di, BufferIndex
+	cmp buf,dog
 	je @@callcheckb			;если собака то вызываем проверку и выходим без очистки
 							;------------------------------------------------------
-	cmp Buffer[di],semicolon		;при других ограничителях
+	cmp buf,semicolon		;при других ограничителях
 	je @@exitcl
-	cmp Buffer[di],Space		;выходим и чистим буффер
+	cmp buf,Space		;выходим и чистим буффер
 	je @@exitcl
-	cmp Buffer[di],comma		;
+	cmp buf,comma		;
 	je @@exitcl
-	cmp Buffer[di],CR		;каретка
+	cmp buf,CR		;каретка
 	je @@exitcl
-	cmp Buffer[di],LF		;строка
+	cmp buf,LF		;строка
 	je @@exitcl
 	jmp @@exit
 @@callcheckb:
+	mov di, BufferIndex
+	mov Buffer[di],0
+	dec BufferIndex	
 	call checkBuffer
-	cmp ah,1				;если вернуло 0 то не чистим
+	cmp ah,1	
+	je @@exit1
+	;push ax
+	;push dx
+	;mov ah,9			;вывод правильного локального адреса
+	;mov di, BufferIndex
+	;mov Buffer[di+2],'$'
+	;mov Buffer[di+1],' '
+	;lea dx,Buffer
+	;int 21h
+	;pop dx
+	;pop ax
+	@@exit1:				
 	jne @@exit
 @@exitcl:
 	call emptyBuffer
 @@exit:
+	pop di
 	ret
+terminator endp
 
 writeBuffer proc near
-mov ah,	3fh      ; будем читать из файла
+	cmp BufferIndex,64
+	jne cont1
+	call emptyBuffer
+	cont1:
+	mov ah,	3fh      ; будем читать из файла
     mov cx,	1        ; 1 байт
 	mov di,BufferIndex
-    mov dx,offset Buffer[di]      ; в память buf
+    mov dx,offset buf      ; в память buf
     int 21h 
-ret
-	
+	mov dl,buf
+	mov Buffer[di],dl
+	ret
+writeBuffer endp
 
 begin:
 	;----------------{ check string of parameters }-----------------
@@ -285,15 +318,13 @@ openOK:
 	mov bx, Handler       ; копируем в bx указатель файла
     xor cx,	cx
     xor dx,	dx
-    mov ax,	4200h
-    int 21h     ; идем к началу файла
 	
 out_str:
     call writeBuffer 	;читаем 1 байт в буффер       
     cmp ax,	cx       ; если достигнуть EoF или ошибка чтения
     jnz close       ; то закрываем файл закрываем файл
 	call terminator
-    ;mov dl,	buf
+    ;mov dl, buf 
     ;mov ah,	2        ; выводим символ в dl
     ;int 21h     ; на стандартное устройство вывода
 	inc BufferIndex		;увеличим индекс на 1 
@@ -301,8 +332,6 @@ out_str:
 close:           ; закрываем файл, после чтения
     mov ah,	3eh
     int 21h
-	
-	
 	
 exit:            ; завершаем программу
     mov ah,4ch
@@ -312,7 +341,7 @@ error1:
 	print_mes "File opening/creation error"
 	int 20h
 	
-
+buf db 0
 Buffer DB 40h dup(0)    
 Handler DW  ?  
 BufferIndex dw 0
