@@ -19,12 +19,10 @@ Space	EQU	20h
 
 ;----------{ functions }----------
 ; 
-; Передана строчная латинская буква в нижнем регистре? 0 : 1
+; В al строчная латинская буква в нижнем регистре? 0 : 1
 ;
-isLetterLC macro letter	
-	local notLetter
-	pushf
-	mov al, letter					
+isLetterLC PROC near	
+	pushf				
 	cmp al, 61h
 	jl notLetter
 	cmp al, 7ah
@@ -35,31 +33,30 @@ notLetter:
 	mov ah, 1
 exitIsLetterLC:
 	popf
-	endm
+	ret
+isLetterLC endp
 ; 
-; Передана строчная латинская буква в верхнем регистре? 0 : 1
+; В al строчная латинская буква в верхнем регистре? 0 : 1
 ;
-isLetterUC macro letter	
-	local notLetter
-	pushf
-	mov al, letter					
+isLetterUC PROC near	
+	pushf				
 	cmp al, 41h
-	jl notLetter
+	jl @@notLetter
 	cmp al, 5ah
-	jg notLetter
+	jg @@notLetter
 	mov ah, 0
 	jmp exitIsLetterUC
-notLetter:
+@@notLetter:
 	mov ah, 1
 exitIsLetterUC:
 	popf
-	endm
+	ret
+isLetterUC endp
 ; 
-; Передана цифра ? 0 : 1
+; В al передана цифра ? 0 : 1
 ;
-isNumeral macro numeral	
-	pushf
-	mov al, numeral					
+isNumeral PROC near
+	pushf				
 	cmp al, 30h
 	jl notNumeral
 	cmp al, 39h
@@ -70,14 +67,14 @@ notNumeral:
 	mov ah, 1
 exitIsNumeral:
 	popf
-	endm
+	ret
+isNumeral endp
 ;
-; Передан специальный символ локальной части (точка проверяется отдельно)? 0 : 1
+; В al символ локальной части (точка проверяется отдельно)? 0 : 1
 ;
-isCharacter macro char
+isCharacter PROC near
 	pushf
 	mov ah, 0
-	mov al, char
 	cmp al, hyphen
 	je exitIsCharacter
 	cmp al, underscore
@@ -90,7 +87,8 @@ notCharacter:
 	mov ah, 1
 exitIsCharacter:
 	popf
-	endm
+	ret
+isCharacter endp
 ;
 ; Печать переданного символа
 ;
@@ -140,9 +138,33 @@ emptyBuffer PROC near
 	pop cx
 @@exit:	
 	popf
-	dec BufferIndex
-	ret
+	dec BufferIndex		; BufferIndex устанавливается в -1, чтобы избежать
+	ret					; заполнения буфера со второго элемента
 emptyBuffer endp
+;
+; Процедура очистки DomainBuffer. Сбрасывает DomainBufferIndex
+;
+emptyDomainBuffer PROC near
+	LOCALS @@
+	pushf
+	cmp DomainBufferIndex, 0
+	je @@exit
+	push cx
+	push di
+	mov cx, DomainBufferIndex
+	mov di, 0
+@@cycle:
+	mov DomainBuffer[di], 0
+	inc di
+	loop @@cycle
+	mov DomainBufferIndex, 0
+	pop di
+	pop cx
+@@exit:	
+	popf
+	dec DomainBufferIndex		; DomainBufferIndex устанавливается в -1, чтобы избежать
+	ret							; заполнения буфера со второго элемента
+emptyDomainBuffer endp
 ;
 ; Процедура проверки локальной части
 ;
@@ -151,17 +173,17 @@ checkBuffer PROC near
 	pushf
 	push di
 	mov ah, 1
-	cmp BufferIndex, 0
+	cmp BufferIndex, 0		; длина локальной части не 0
 	jne @@cont_cb1
 	jmp @@exit
 @@cont_cb1:
 	mov di, BufferIndex
-	cmp Buffer[di], dot
+	cmp Buffer[di], dot		; последний символ не точка
 	jne @@cont_cb2
 	jmp @@exit
 @@cont_cb2:
 	mov di, 0
-	cmp Buffer[di], dot
+	cmp Buffer[di], dot		; первый символ не точка
 	jne @@cont_cb3
 	jmp @@exit
 @@cont_cb3:
@@ -169,53 +191,106 @@ checkBuffer PROC near
 	mov cx, BufferIndex
 @@cycle:
 	mov al, Buffer[di]
-	cmp al, dot
-	je @@cont_cycle
-	isLetterLC al
+	call isLetterLC			; i-ый символ строчная латинская буква
 	cmp ah, 0
 	je @@cont_cycle
-	isLetterUC al
+	call isLetterUC			; i-ый символ заглавная латинская буква
 	cmp ah, 0
 	je @@cont_cycle
-	isNumeral al
+	call isNumeral			; i-ый символ цифра
 	cmp ah, 0
 	je @@cont_cycle
-	isCharacter al
+	call isCharacter		; i-ый символ специальный символ
 	cmp ah, 0
 	je @@cont_cycle
-
+	cmp al, dot				; i-ый символ точка (реализована отдельная проверка)
+	jne @@exit_cycle
+	cmp al, Buffer[di+1] 	; Если i-ый символ точка, тогда i+1-ый не точка
+	jne @@cont_cycle
+@@exit_cycle:
 	pop cx
-	mov ah, 1
 	jmp @@exit
-@@cont_cycle:	
+@@cont_cycle:
 	inc di
 	loop @@cycle
-	
-	; в этом месте реализовать процедуру нескольких точек
-	mov ah, 0
 	pop cx
 @@exit:
 	pop di
 	popf
 	ret
 checkBuffer endp
+;
+; Процедура проверки домена
+;
+checkDomainBuffer PROC near
+	LOCALS @@
+	pushf
+	push di
+	push cx
+	push bx		; маркер поддомена (пропускает не более однйой точки)
+	mov ah, 1
+	cmp DomainBufferIndex, 0
+	je @@exit
+	mov di, BufferIndex
+	cmp DomainBuffer[di], hyphen	; последний символ дефис
+	je @@exit
+	cmp DomainBuffer[di], dot		; последний символ точка
+	je @@exit
+	mov di, 0
+	cmp DomainBuffer[di], hyphen 	; первый символ дефис
+	je @@exit
+	cmp DomainBuffer[di], dot		; первый символ точка
+	je @@exit
+	xor bx, bx
+	mov cx, DomainBufferIndex
+@@cycle:
+	mov al, DomainBuffer[di]
+	call isLetterLC				; i-ый символ строчная латинская буква
+	cmp ah, 0
+	je @@cont_cycle
+	call isLetterUC				; i-ый символ заглавная латинская буква
+	cmp ah, 0
+	je @@cont_cycle
+	call isNumeral				; i-ый символ цифра
+	cmp ah, 0
+	je @@cont_cycle
+	cmp al, hyphen				; i-ый символ дефис
+	je @@cont_cycle
+	cmp al, dot					; i-ый символ точка
+	jne @@exit
+	inc bx
+	cmp bx, 1			; встретилась единственная точка
+	jne @@exit
+	cmp DomainBuffer[di-1], hyphen	; перед точкой дефис
+	je @@exit
+	cmp DomainBuffer[di+1], hyphen	; после точки дефис
+	je @@exit
+@@cont_cycle:
+	inc di
+	loop @@cycle
+@@exit:
+	pop bx
+	pop cx
+	pop di
+	popf
+	ret
+checkDomainBuffer endp
 
 terminator proc	near
 	LOCALS @@
 	push di
 	mov di, BufferIndex
-	cmp buf,dog
-	je @@callcheckb			;если собака то вызываем проверку и выходим без очистки
-							;------------------------------------------------------
-	cmp buf,semicolon		;при других ограничителях
+	cmp buf,dog				;если собака то вызываем проверку и выходим без очистки
+	je @@callcheckb			;при других ограничителях выходим и чистим буффер:
+	cmp buf,semicolon		;точка с запятой	
 	je @@exitcl
-	cmp buf,Space		;выходим и чистим буффер
+	cmp buf,Space			;пробел
 	je @@exitcl
-	cmp buf,comma		;
+	cmp buf,comma			;запятая
 	je @@exitcl
-	cmp buf,CR		;каретка
+	cmp buf,CR				;каретка
 	je @@exitcl
-	cmp buf,LF		;строка
+	cmp buf,LF				;строка
 	je @@exitcl
 	jmp @@exit
 @@callcheckb:
@@ -225,16 +300,18 @@ terminator proc	near
 	call checkBuffer
 	cmp ah,1	
 	je @@exit1
+	
 	;push ax
 	;push dx
-	;mov ah,9			;вывод правильного локального адреса
+	;mov ah,9			
 	;mov di, BufferIndex
 	;mov Buffer[di+2],'$'
 	;mov Buffer[di+1],' '
 	;lea dx,Buffer
-	;int 21h
+	;int 21h				;вывод правильного локального адреса
 	;pop dx
 	;pop ax
+	
 	@@exit1:				
 	jne @@exit
 @@exitcl:
@@ -324,9 +401,11 @@ out_str:
     cmp ax,	cx       ; если достигнуть EoF или ошибка чтения
     jnz close       ; то закрываем файл закрываем файл
 	call terminator
-    ;mov dl, buf 
+    
+	;mov dl, buf 
     ;mov ah,	2        ; выводим символ в dl
     ;int 21h     ; на стандартное устройство вывода
+	
 	inc BufferIndex		;увеличим индекс на 1 
     jmp out_str
 close:           ; закрываем файл, после чтения
@@ -336,16 +415,21 @@ close:           ; закрываем файл, после чтения
 exit:            ; завершаем программу
     mov ah,4ch
     int 21h
-
+	
+;-----------{ errors }------------
 error1:
 	print_mes "File opening/creation error"
 	int 20h
 	
+;----------{ variables }----------
 buf db 0
-Buffer DB 40h dup(0)    
+Buffer DB 41h dup(0)   
+DomainBuffer DB 80h dup(0)
 Handler DW  ?  
-BufferIndex dw 0
-FileName    DB  14, 0, 14 dup (0)  
+BufferIndex DW 0
+DomainBufferIndex DW 0 
+FileName    DB  14, 0, 14 dup (0)
+;--------------------------------- 
 
 code_seg ends
 	end start
