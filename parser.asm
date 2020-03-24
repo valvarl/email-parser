@@ -11,6 +11,8 @@ hyphen		EQU 2dh		;-
 underscore 	EQU	5fh		;_
 plus		EQU 2bh		;+
 apostrophe	EQU 27h		;'
+comma		EQU 2ch		;,
+semicolon	EQU 3bh		;;
 CR		EQU	13
 LF 		EQU	10
 Space	EQU	20h
@@ -116,6 +118,40 @@ msg	DB	message,'$'
 nxt:
 	endm
 
+terminator proc	near
+LOCALS @@
+	cmp Buffer[di],dog
+	je @@callcheckb			;если собака то вызываем проверку и выходим без очистки
+							;------------------------------------------------------
+	cmp Buffer[di],semicolon		;при других ограничителях
+	je @@exitcl
+	cmp Buffer[di],Space		;выходим и чистим буффер
+	je @@exitcl
+	cmp Buffer[di],comma		;
+	je @@exitcl
+	cmp Buffer[di],CR		;каретка
+	je @@exitcl
+	cmp Buffer[di],LF		;строка
+	je @@exitcl
+	jmp @@exit
+@@callcheckb:
+	call checkBuffer
+	cmp ah,1				;если вернуло 0 то не чистим
+	jne @@exit
+@@exitcl:
+	call emptyBuffer
+@@exit:
+	ret
+
+writeBuffer proc near
+mov ah,	3fh      ; будем читать из файла
+    mov cx,	1        ; 1 байт
+	mov di,BufferIndex
+    mov dx,offset Buffer[di]      ; в память buf
+    int 21h 
+ret
+	
+
 begin:
 	;----------------{ check string of parameters }-----------------
 	mov CL, ES:[80h] ; addr. of length parameter in psp
@@ -178,19 +214,15 @@ openOK:
     mov ax,	4200h
     int 21h     ; идем к началу файла
 	
-	mov di, offset BufIn
 out_str:
-    mov ah,	3fh      ; будем читать из файла
-    mov cx,	1        ; 1 байт
-    lea dx,	BufIn[di]      ; в память buf
-	shr BufIn, 8
-    int 21h         
+    call writeBuffer 	;читаем 1 байт в буффер       
     cmp ax,	cx       ; если достигнуть EoF или ошибка чтения
     jnz close       ; то закрываем файл закрываем файл
+	call terminator
     ;mov dl,	buf
     ;mov ah,	2        ; выводим символ в dl
     ;int 21h     ; на стандартное устройство вывода
-	inc di
+	inc BufferIndex		;увеличим индекс на 1 
     jmp out_str
 close:           ; закрываем файл, после чтения
     mov ah,	3eh
@@ -207,8 +239,9 @@ error1:
 	int 20h
 	
 
-BufIn DB 40h dup()    
+Buffer DB 40h dup(0)    
 Handler DW  ?  
+BufferIndex dw 0
 FileName    DB  14, 0, 14 dup (0)  
 
 code_seg ends
