@@ -70,7 +70,7 @@ exitIsNumeral:
 	popf
 	endm
 ;
-; Передан специальный символ локальной части точка проверяется отдельно)? 0 : 1
+; Передан специальный символ локальной части (точка проверяется отдельно)? 0 : 1
 ;
 isCharacter macro char
 	pushf
@@ -117,6 +117,80 @@ print_mes	macro message
 msg	DB	message,'$'
 nxt:
 	endm
+;
+; Процедура очистки Buffer. Сбрасывает BufferIndex.
+;
+emptyBuffer PROC near
+	LOCALS @@
+	pushf
+	cmp BufferIndex, 0
+	je @@exit
+	push cx
+	push di
+	mov cx, BufferIndex
+	mov di, 0
+@@cycle:
+	mov Buffer[di], 0
+	inc di
+	loop @@cycle
+	mov BufferIndex, 0
+	pop di
+	pop cx
+@@exit:	
+	popf
+	ret
+emptyBuffer endp
+;
+; Процедура проверки локальной части
+;
+checkBuffer PROC near
+	LOCALS @@
+	pushf
+	push di
+	mov ah, 1
+	cmp BufferIndex, 0
+	je @@exit
+	mov di, BufferIndex
+	cmp Buffer[di], dot
+	je @@exit
+	mov di, 0
+	cmp Buffer[di], dot
+	je @@exit
+	push cx
+	mov cx, BufferIndex
+@@cycle:
+	mov al, Buffer[di]
+	cmp al, dot
+	je @@cont_cycle
+	isLetterLC al
+	cmp ah, 0
+	je @@cont_cycle
+	isLetterUC al
+	cmp ah, 0
+	je @@cont_cycle
+	isNumeral al
+	cmp ah, 0
+	je @@cont_cycle
+	isCharacter al
+	cmp ah, 0
+	je @@cont_cycle
+
+	pop cx
+	mov ah, 1
+	jmp @@exit
+@@cont_cycle	
+	inc di
+	loop @@cycle
+	
+	; в этом месте реализовать процедуру нескольких точек
+	mov ah, 0
+	pop cx
+	jmp exit
+@@exit:
+	pop di
+	popf
+	ret
+emptyBuffer endp
 
 terminator proc	near
 LOCALS @@
