@@ -142,30 +142,6 @@ emptyBuffer PROC near
 	ret					; заполнения буфера со второго элемента
 emptyBuffer endp
 ;
-; Процедура очистки DomainBuffer. Сбрасывает DomainBufferIndex
-;
-emptyDomainBuffer PROC near
-	LOCALS @@
-	pushf
-	cmp DomainBufferIndex, 0
-	je @@exit
-	push cx
-	push di
-	mov cx, DomainBufferIndex
-	mov di, 0
-@@cycle:
-	mov DomainBuffer[di], 0
-	inc di
-	loop @@cycle
-	mov DomainBufferIndex, 0
-	pop di
-	pop cx
-@@exit:	
-	popf
-	dec DomainBufferIndex		; DomainBufferIndex устанавливается в -1, чтобы избежать
-	ret							; заполнения буфера со второго элемента
-emptyDomainBuffer endp
-;
 ; Процедура проверки локальной части
 ;
 checkBuffer PROC near
@@ -229,22 +205,22 @@ checkDomainBuffer PROC near
 	push cx
 	push bx		; маркер поддомена (пропускает не более однйой точки)
 	mov ah, 1
-	cmp DomainBufferIndex, 0
+	cmp BufferIndex, 0
 	je @@exit
 	mov di, BufferIndex
-	cmp DomainBuffer[di], hyphen	; последний символ дефис
+	cmp Buffer[di], hyphen	; последний символ дефис
 	je @@exit
-	cmp DomainBuffer[di], dot		; последний символ точка
+	cmp Buffer[di], dot		; последний символ точка
 	je @@exit
 	mov di, 0
-	cmp DomainBuffer[di], hyphen 	; первый символ дефис
+	cmp Buffer[di], hyphen 	; первый символ дефис
 	je @@exit
-	cmp DomainBuffer[di], dot		; первый символ точка
+	cmp Buffer[di], dot		; первый символ точка
 	je @@exit
 	xor bx, bx
-	mov cx, DomainBufferIndex
+	mov cx, BufferIndex
 @@cycle:
-	mov al, DomainBuffer[di]
+	mov al, Buffer[di]
 	call isLetterLC				; i-ый символ строчная латинская буква
 	cmp ah, 0
 	je @@cont_cycle
@@ -261,9 +237,9 @@ checkDomainBuffer PROC near
 	inc bx
 	cmp bx, 1			; встретилась единственная точка
 	jne @@exit
-	cmp DomainBuffer[di-1], hyphen	; перед точкой дефис
+	cmp Buffer[di-1], hyphen	; перед точкой дефис
 	je @@exit
-	cmp DomainBuffer[di+1], hyphen	; после точки дефис
+	cmp Buffer[di+1], hyphen	; после точки дефис
 	je @@exit
 @@cont_cycle:
 	inc di
@@ -275,10 +251,33 @@ checkDomainBuffer PROC near
 	popf
 	ret
 checkDomainBuffer endp
+;
+;процедура записываем локальную часть в файл
+;
+outputBuffer proc near
+	LOCALS @@
+	push dx
+	push bx
+	push ax					
+	push cx
+	mov bx,handler2
+	mov dx,offset Buffer
+	mov ah,40h
+	mov cx, BufferIndex
+	inc cx
+	int 21h
+	pop cx
+	pop ax
+	pop bx
+	pop dx
+	ret
+outputBuffer endp
 
 terminator proc	near
 	LOCALS @@
 	push di
+	push bx
+	push dx
 	mov di, BufferIndex
 	cmp buf,dog				;если собака то вызываем проверку и выходим без очистки
 	je @@callcheckb			;при других ограничителях выходим и чистим буффер:
@@ -293,30 +292,45 @@ terminator proc	near
 	cmp buf,LF				;строка
 	je @@exitcl
 	jmp @@exit
-@@callcheckb:
+@@callcheckb:				;если мы встретим собаку то ставим флажок, увеличиваем каунтер майлов
+	inc Flag
+	inc CountAll
+	call outputBuffer		;и сразу выводим локальную часть в файл
 	mov di, BufferIndex
-	mov Buffer[di],0
+	mov Buffer[di],0		;в конце буффера собака, нужно убрать
 	dec BufferIndex	
 	call checkBuffer
 	cmp ah,1	
 	je @@exit1
-	
-	;push ax
-	;push dx
-	;mov ah,9			
-	;mov di, BufferIndex
-	;mov Buffer[di+2],'$'
-	;mov Buffer[di+1],' '
-	;lea dx,Buffer
-	;int 21h				;вывод правильного локального адреса
-	;pop dx
-	;pop ax
-	
+	mov IsLocal,0			;если чекбуфер вернул 0 то сохраним в переменную излокал, иначе оставим единицу
 	@@exit1:				
-	jne @@exit
+	jmp @@terminator_cont
 @@exitcl:
+	mov di,Flag				;если флаг не стоит то просто чистим буффер
+	cmp di,0				
+	je  @@terminator_cont
+	mov di,BufferIndex		;если же флаг стоит то в буффере доменная часть
+	mov Buffer[di+1],CR
+	mov Buffer[di+2],LF
+	inc BufferIndex
+	inc BufferIndex
+	call outputBuffer		;её мы сразу выведем
+	dec BufferIndex
+	dec BufferIndex
+	call checkDomainBuffer
+	dec Flag				;уберем флажок локальной части
+	mov di, IsLocal
+	cmp di,1				;если локальная часть неверная
+	je @@terminator_cont	
+	cmp ah,1				;или доменная часть неверная
+	je @@terminator_cont	;то количество верных не меняем
+	inc CountRight			
+	mov IsLocal,1			;иначе увеличим количество верных майлов и вернем дефолтное значение излокал
+@@terminator_cont:
 	call emptyBuffer
 @@exit:
+	pop dx
+	pop bx
 	pop di
 	ret
 terminator endp
@@ -336,7 +350,25 @@ writeBuffer proc near
 	ret
 writeBuffer endp
 
+str_word_to_ascii:
+	mov	cx, 4		; в слове 4 ниббла (полубайта)
+@@:
+	rol	ax, 4		; выдвигаем младшие 4 бита
+	push	ax		; сохраним AX
+	and	al, 0Fh		; оставляем 4 младших бита AL
+	cmp	al, 0Ah		; сравниваем AL со значение 10
+	sbb	al, 69h		; целочисленное вычитание с заёмом
+	das			; BCD-коррекция после вычитания
+	stosb                   ; помещаем получившийся символ в буфер
+	pop	ax		; восстановим AX
+	loop	@@		; цикл
+	ret		
+
 begin:
+	mov ax,3d02h
+	mov dx,offset OutputName
+	int 21h
+	mov Handler2,ax
 	;----------------{ check string of parameters }-----------------
 	mov CL, ES:[80h] ; addr. of length parameter in psp
 	; is it 0 in buffer?
@@ -397,6 +429,8 @@ openOK:
     xor dx,	dx
 	
 out_str:
+	mov di, Flag
+	
     call writeBuffer 	;читаем 1 байт в буффер       
     cmp ax,	cx       ; если достигнуть EoF или ошибка чтения
     jnz close       ; то закрываем файл закрываем файл
@@ -409,9 +443,36 @@ out_str:
 	inc BufferIndex		;увеличим индекс на 1 
     jmp out_str
 close:           ; закрываем файл, после чтения
-    mov ah,	3eh
-    int 21h
+	cld
+	mov di,offset Buffer
+	mov ax,CountAll
+	print_mes "Total emails: "
+	call str_word_to_ascii
+	mov Buffer[5],'$'
+	mov ah,9
+	mov dx,offset Buffer
+	int 21h
+	print_letter CR
+	print_letter LF
 	
+	cld
+	mov di,offset Buffer
+	mov ax,CountRight
+	print_mes "Correct emails: "
+	call str_word_to_ascii
+	mov Buffer[5],'$'
+	mov ah,9
+	mov dx,offset Buffer
+	int 21h
+	print_letter CR
+	print_letter LF
+	
+	mov bx,Handler
+    mov ah,	3eh
+    int 21h	
+	mov bx,Handler2
+    mov ah,	3eh
+    int 21h	
 exit:            ; завершаем программу
     mov ah,4ch
     int 21h
@@ -425,10 +486,16 @@ error1:
 buf db 0
 Buffer DB 41h dup(0)   
 DomainBuffer DB 80h dup(0)
-Handler DW  ?  
+Handler DW  ?
+Handler2 dw ?  
 BufferIndex DW 0
 DomainBufferIndex DW 0 
 FileName    DB  14, 0, 14 dup (0)
+OutputName db 'emails.txt'
+Flag dw 0
+CountAll dw 0
+CountRight dw 0
+IsLocal dw 1
 ;--------------------------------- 
 
 code_seg ends
